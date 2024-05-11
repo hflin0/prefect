@@ -28,6 +28,7 @@ import docker.errors
 import packaging.version
 from docker import DockerClient
 from docker.models.containers import Container
+from docker.types import DeviceRequest
 from pydantic import VERSION as PYDANTIC_VERSION
 
 import prefect
@@ -54,6 +55,7 @@ else:
 
 from slugify import slugify
 from typing_extensions import Literal
+from typing import Dict
 
 CONTAINER_LABELS = {
     "io.prefect.version": prefect.__version__,
@@ -171,6 +173,12 @@ class DockerWorkerJobConfiguration(BaseJobConfiguration):
         description="Give extended privileges to created container.",
     )
 
+    gpus: Optional[str] = Field(
+        default_factory=None,
+        description="GPU devices to add to the container ('all' to pass all GPUs)",
+        example="all",
+    )
+
     @validator("volumes")
     def _validate_volume_format(cls, volumes):
         """Validates that provided volume strings are in the correct format."""
@@ -182,6 +190,17 @@ class DockerWorkerJobConfiguration(BaseJobConfiguration):
                 )
 
         return volumes
+    
+    @validator("gpus")
+    def _validate_gpu_format(cls, gpus):
+        """Validates that provided GPU strings are in the correct format."""
+        if gpus and gpus != "all":
+            for gpu_id in gpus.split(","):
+                if not gpu_id.isdigit():
+                    raise ValueError(
+                        f"Invalid GPU specification. Expected format '0,1,2', but got {gpu_id!r}"
+                    )
+        return gpus 
 
     def _convert_labels_to_docker_format(self, labels: Dict[str, str]):
         """Converts labels to the format expected by Docker."""
@@ -303,6 +322,14 @@ class DockerWorkerJobConfiguration(BaseJobConfiguration):
                 return "host"
 
         # Default to unset
+        return None
+
+    def get_device_requests(self) -> Optional[List[DeviceRequest]]:
+
+        if self.gpus:
+            return [DeviceRequest(device_ids=[self.gpus], capabilities=[["gpu"]])]
+        
+        # If no GPU devices are requested, return None
         return None
 
     def get_extra_hosts(self, docker_client) -> Optional[Dict[str, str]]:
@@ -526,6 +553,7 @@ class DockerWorker(BaseWorker):
     ) -> Dict:
         """Builds a dictionary of container settings to pass to the Docker API."""
         network_mode = configuration.get_network_mode()
+        device_requests = configuration.get_device_requests()
         return dict(
             image=configuration.image,
             network=configuration.networks[0] if configuration.networks else None,
@@ -540,6 +568,7 @@ class DockerWorker(BaseWorker):
             mem_limit=configuration.mem_limit,
             memswap_limit=configuration.memswap_limit,
             privileged=configuration.privileged,
+            device_requests=device_requests,
         )
 
     def _create_and_start_container(
