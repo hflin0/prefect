@@ -457,6 +457,9 @@ class DockerWorker(BaseWorker):
         )
 
         exit_code = container.attrs["State"].get("ExitCode")
+
+        container.remove()
+
         return DockerWorkerResult(
             status_code=exit_code if exit_code is not None else -1,
             identifier=container_pid,
